@@ -1,0 +1,73 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  EduStream NAT layer (Group 3): an Elastic IP + NAT Gateway + the private
+  subnet's default route (0.0.0.0/0 -> NAT). Kept as a SEPARATE stack so it can
+  be turned on only for demos and deleted when idle (NAT Gateway bills ~24/7).
+
+  ONE-TIME MIGRATION: if a NAT Gateway and its 0.0.0.0/0 route already exist on
+  the private route table (they do - nat-084e...), delete that NAT and remove
+  its 0.0.0.0/0 route FIRST, otherwise the DefaultRoute below conflicts with the
+  existing route. After that, this stack owns NAT on/off cleanly.
+
+Parameters:
+  PublicSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-06afd7a9d3dc32aff
+    Description: A PUBLIC subnet to host the NAT Gateway.
+  PrivateRouteTableId:
+    Type: String
+    Default: rtb-0f9ff04bb17c84e27
+    Description: >
+      Route table associated with the instances' PRIVATE subnet
+      (subnet-0342e94004c852e59). Find it with:
+      aws ec2 describe-route-tables --filters
+      "Name=association.subnet-id,Values=subnet-0342e94004c852e59"
+      --query "RouteTables[].RouteTableId" --output text
+  PrivateRouteTableId2:
+    Type: String
+    Default: ""
+    Description: >
+      Route table of the SECOND private subnet (subnet-021fcf7d6bc3546e4) IF it
+      uses a different route table. Leave blank if both private subnets share one
+      route table.
+
+Conditions:
+  HasSecondRouteTable: !Not [!Equals [!Ref PrivateRouteTableId2, ""]]
+
+Resources:
+  NatEip:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - { Key: Project, Value: EduStream }
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !Ref PublicSubnetId
+      Tags:
+        - { Key: Name, Value: g3-edustream-nat }
+        - { Key: Project, Value: EduStream }
+
+  DefaultPrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableId
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  DefaultPrivateRoute2:
+    Type: AWS::EC2::Route
+    Condition: HasSecondRouteTable
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableId2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+Outputs:
+  NatGatewayId:
+    Value: !Ref NatGateway
+  NatEip:
+    Value: !Ref NatEip

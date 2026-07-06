@@ -1,0 +1,173 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  EduStream compute layer (Group 3): Security Groups + Launch Template +
+  Target Group + Application Load Balancer + Listener + Auto Scaling Group
+  (with request-based target-tracking scaling).
+  References an EXISTING VPC/subnets (does not create networking or IAM).
+  Deploy for a demo; delete the stack when idle to stop ALB + EC2 charges.
+
+  Requires the NAT stack (edustream-nat.yaml) to be up first, because the
+  instances sit in PRIVATE subnets and need outbound internet at boot
+  (yum/pip) and at runtime (DynamoDB).
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-0f36c105292a2748c
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Default: "subnet-06afd7a9d3dc32aff,subnet-06d706d6c2d4037f9"
+    Description: "At least 2 PUBLIC subnets in different AZs (for the internet-facing ALB)."
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Default: "subnet-0342e94004c852e59,subnet-021fcf7d6bc3546e4"
+    Description: PRIVATE subnets for the EC2 instances.
+  AmiId:
+    Type: AWS::EC2::Image::Id
+    Default: ami-046b36f55e189564a
+    Description: Amazon Linux 2 AMI id (same as your current launch template).
+  InstanceType:
+    Type: String
+    Default: t3.micro
+  InstanceProfileName:
+    Type: String
+    Default: LabInstanceProfile
+    Description: Existing instance profile (Learner Lab) - IAM is not created here.
+  CodeBucket:
+    Type: String
+    Default: edustream-code-group3
+  DesiredCapacity:
+    Type: Number
+    Default: 1
+
+Resources:
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: EduStream ALB - allow HTTP from the internet
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - { Key: Project, Value: EduStream }
+        - { Key: Group, Value: "3" }
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: EduStream instances - allow 5000 only from the ALB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+      Tags:
+        - { Key: Project, Value: EduStream }
+        - { Key: Group, Value: "3" }
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${AWS::StackName}-lt"
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Name: !Ref InstanceProfileName
+        SecurityGroupIds:
+          - !Ref InstanceSecurityGroup
+        MetadataOptions:
+          HttpTokens: required        # IMDSv2
+        # Bootstrap: fetch the real userdata.sh from S3 and run it. Keeps this
+        # template small and makes S3 the single source of truth for boot logic.
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -xe
+            aws s3 cp s3://${CodeBucket}/edustream-ec2/userdata.sh /tmp/edustream-userdata.sh --region ${AWS::Region}
+            bash /tmp/edustream-userdata.sh
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - { Key: Name, Value: g3-edustream-ec2 }
+              - { Key: Project, Value: EduStream }
+              - { Key: Group, Value: "3" }
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VpcId
+      Port: 5000
+      Protocol: HTTP
+      TargetType: instance
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      Matcher:
+        HttpCode: "200"
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${AWS::StackName}-alb"
+      Type: application
+      Scheme: internet-facing
+      Subnets: !Ref PublicSubnetIds
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      Tags:
+        - { Key: Project, Value: EduStream }
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub "${AWS::StackName}-asg"
+      VPCZoneIdentifier: !Ref PrivateSubnetIds
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: "1"
+      MaxSize: "3"
+      DesiredCapacity: !Ref DesiredCapacity
+      TargetGroupARNs:
+        - !Ref TargetGroup
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300       # allow time for yum/pip at boot
+      Tags:
+        - { Key: Project, Value: EduStream, PropagateAtLaunch: true }
+        - { Key: Group, Value: "3", PropagateAtLaunch: true }
+
+  # Dynamic, load-based scaling: keep each instance at ~100 requests/min by
+  # adding/removing instances (within Min..Max) as ALB traffic rises and falls.
+  # Target tracking auto-manages the CloudWatch alarms; no manual alarms needed.
+  RequestScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ALBRequestCountPerTarget
+          ResourceLabel: !Sub "${LoadBalancer.LoadBalancerFullName}/${TargetGroup.TargetGroupFullName}"
+        TargetValue: 100.0
+
+Outputs:
+  AlbDnsName:
+    Description: Browse here to use the app.
+    Value: !GetAtt LoadBalancer.DNSName

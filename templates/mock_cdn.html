@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EduStream — Mock Content Origin</title>
+</head>
+<body style="font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+             background: #fffbea; margin: 0; display: flex; min-height: 100vh;
+             align-items: center; justify-content: center;">
+
+  <div style="background: #fff; padding: 36px; border-radius: 10px;
+              box-shadow: 0 4px 20px rgba(0,0,0,.08); width: 480px;">
+
+    <div style="font-size: 13px; font-weight: 700; color: #b45309; letter-spacing: 1px;">
+      MOCK CONTENT ORIGIN
+    </div>
+    <h1 style="margin: 6px 0 12px; font-size: 20px; color: #1a3d7c;">
+      This is a placeholder, not real content
+    </h1>
+    <p style="color: #4b5563; font-size: 14px; line-height: 1.5;">
+      In production this URL would be a private <strong>S3 Presigned URL</strong>
+      or <strong>CloudFront Signed URL</strong> that streams the actual file.
+      While the prototype runs in <code>mock</code> mode, no real content is served.
+    </p>
+
+    <table style="width: 100%; font-size: 13px; color: #374151; border-collapse: collapse;">
+      <tr><td style="padding: 4px 0; color: #6b7280;">Object key</td><td><code>{{ object_key }}</code></td></tr>
+      <tr><td style="padding: 4px 0; color: #6b7280;">Mock token</td><td><code>{{ token }}</code></td></tr>
+      <tr><td style="padding: 4px 0; color: #6b7280;">Expires (epoch)</td><td><code>{{ expires }}</code></td></tr>
+    </table>
+
+    <a href="{{ url_for('resources_page') }}"
+       style="display: inline-block; margin-top: 20px; background: #1a3d7c; color: #fff;
+              padding: 9px 20px; border-radius: 6px; text-decoration: none; font-size: 14px;">
+      ← Back to Resources
+    </a>
+  </div>
+</body>
+</html>

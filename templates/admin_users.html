@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EduStream — Manage users</title>
+  <style>
+    :root { --bg:#0f172a; --card:#1e293b; --accent:#38bdf8; --text:#e2e8f0; --muted:#94a3b8; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 1rem 1.5rem; border-bottom: 1px solid #334155;
+    }
+    header h1 { font-size: 1.1rem; margin: 0; color: var(--accent); }
+    header .right { display: flex; align-items: center; gap: 1rem; font-size: .9rem; }
+    header a { color: var(--accent); text-decoration: none; }
+    main { max-width: 880px; margin: 0 auto; padding: 1.5rem; }
+    .search { display: flex; gap: .5rem; margin-bottom: 1.25rem; }
+    .search input {
+      flex: 1; padding: .55rem .7rem; border-radius: 8px; border: 1px solid #475569;
+      background: #0f172a; color: var(--text); font-size: .95rem;
+    }
+    .search button, .search a {
+      padding: .55rem .8rem; border-radius: 8px; border: none; cursor: pointer;
+      background: var(--accent); color: #042a3b; font-weight: 600; font-size: .9rem;
+      text-decoration: none; display: inline-flex; align-items: center;
+    }
+    .search a.clear { background: #334155; color: var(--text); }
+    table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+    th, td { text-align: left; padding: .65rem .5rem; border-bottom: 1px solid #334155; }
+    th { color: var(--muted); font-weight: 600; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+    .pill {
+      font-size: .72rem; font-weight: 600; padding: .2rem .55rem; border-radius: 999px;
+      text-transform: uppercase; letter-spacing: .04em;
+    }
+    .pill.yes { background: #064e3b; color: #6ee7b7; }
+    .pill.no { background: #7f1d1d; color: #fecaca; }
+    .act button {
+      padding: .4rem .7rem; border-radius: 8px; border: none; cursor: pointer;
+      font-weight: 600; font-size: .82rem;
+    }
+    .act .authorize { background: #16a34a; color: #f0fdf4; }
+    .act .revoke { background: #b91c1c; color: #fef2f2; }
+    .empty { color: var(--muted); padding: 1.5rem .5rem; }
+    .self { color: var(--muted); font-size: .8rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>EduStream — User authorization</h1>
+    <div class="right">
+      <a href="{{ url_for('resources_page') }}">Courses</a>
+      <a href="{{ url_for('logout') }}">Log out</a>
+    </div>
+  </header>
+  <main>
+    <form class="search" method="get" action="{{ url_for('admin_users') }}">
+      <input name="q" value="{{ query or '' }}" placeholder="Search by username…" autofocus />
+      <button type="submit">Search</button>
+      {% if query %}<a class="clear" href="{{ url_for('admin_users') }}">Clear</a>{% endif %}
+    </form>
+
+    {% if users %}
+    <table>
+      <thead>
+        <tr><th>Username</th><th>Role</th><th>Status</th><th>Action</th></tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td>{{ u.username }}</td>
+          <td>{{ u.role }}</td>
+          <td>
+            {% if u.authorized %}<span class="pill yes">Authorized</span>
+            {% else %}<span class="pill no">Not authorized</span>{% endif %}
+          </td>
+          <td class="act">
+            {% if u.username == current.username %}
+              <span class="self">— (you)</span>
+            {% else %}
+            <form method="post"
+                  action="{{ url_for('admin_set_authorization', username=u.username) }}">
+              <input type="hidden" name="q" value="{{ query or '' }}" />
+              {% if u.authorized %}
+                <input type="hidden" name="action" value="revoke" />
+                <button class="revoke" type="submit">Revoke</button>
+              {% else %}
+                <input type="hidden" name="action" value="authorize" />
+                <button class="authorize" type="submit">Authorize</button>
+              {% endif %}
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No users match "{{ query }}".</p>
+    {% endif %}
+  </main>
+</body>
+</html>

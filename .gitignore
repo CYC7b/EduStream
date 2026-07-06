@@ -1,0 +1,59 @@
+# --- Secrets & environment (NEVER commit these) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*_rsa
+*_rsa.pub
+id_rsa*
+credentials
+.aws/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+
+# --- Local tooling / editor state ---
+.agents/
+.claude/
+.codex/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- Runtime-generated local data ---
+*.db
+*.sqlite
+*.sqlite3
+instance/
+uploads/
+tmp/
+temp/
+
+# --- Project deliverables / exported docs not required to run ---
+EduStream_Architecture.html
+EduStream_Group3.pptx
+EduStream_Group3_Final_Report.docx
+API_CONTRACT.md
+ARCHITECTURE_NOTES.md
+GAP_ANALYSIS.md
+infra/COST-TEARDOWN.md
+
+# --- Build / OS ---
+build/
+dist/
+*.log
+.DS_Store

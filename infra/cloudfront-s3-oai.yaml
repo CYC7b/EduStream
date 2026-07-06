@@ -1,0 +1,176 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  EduStream content delivery infrastructure (Group 3): a PRIVATE S3 content
+  bucket (all public access blocked), a CloudFront distribution that reaches it
+  via an Origin Access Identity (OAI), a trusted key group for CloudFront Signed
+  URLs (15-min links minted by the EC2 Gatekeeper), and CloudFront standard
+  access logging to a SEPARATE S3 bucket for audit trails.
+
+  NOTE: This is a *from-scratch* reference — it CREATES the content and log
+  buckets. Group 3's buckets already exist (edustream-video-vault-group3,
+  edustream-vault-logs-group3), so deploying this as-is would clash. For the
+  live setup follow README.md (reuses the existing buckets via the console).
+  This file documents the desired end-state config (private S3 + OAI + key
+  group + logging) and validates with:
+    aws cloudformation validate-template --template-body file://cloudfront-s3-oai.yaml
+
+Parameters:
+  ContentBucketName:
+    Type: String
+    Default: edustream-video-vault-group3
+    Description: Private bucket that stores course videos/documents.
+  LogBucketName:
+    Type: String
+    Default: edustream-vault-logs-group3
+    Description: Separate bucket for CloudFront access logs (audit trail).
+  CloudFrontPublicKey:
+    Type: String
+    Description: >
+      PEM-encoded RSA PUBLIC key used to verify CloudFront Signed URLs. Generate
+      the matching private key offline (see infra/README.md) and keep it secret.
+      Pass with: ParameterValue="$(cat public_key.pem)"
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Storage — private content bucket (all public access blocked)
+  # ---------------------------------------------------------------------------
+  ContentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref ContentBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+  # ---------------------------------------------------------------------------
+  # Monitoring — separate bucket for CloudFront access logs (audit trail)
+  # ACLs are enabled (BucketOwnerPreferred) so CloudFront standard logging can
+  # grant the log-delivery account write access. Public access stays blocked.
+  # ---------------------------------------------------------------------------
+  LogBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref LogBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-logs
+            Status: Enabled
+            ExpirationInDays: 365
+
+  # ---------------------------------------------------------------------------
+  # Content Delivery — Origin Access Identity (OAI) + bucket policy
+  # The bucket policy grants ONLY the OAI read access, so objects are reachable
+  # exclusively through CloudFront, never directly/publicly.
+  # ---------------------------------------------------------------------------
+  CloudFrontOAI:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub "EduStream OAI for ${ContentBucketName}"
+
+  ContentBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ContentBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontOAIReadOnly
+            Effect: Allow
+            Principal:
+              CanonicalUser: !GetAtt CloudFrontOAI.S3CanonicalUserId
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${ContentBucketName}/*"
+
+  # ---------------------------------------------------------------------------
+  # Signed URLs — trusted public key + key group
+  # The EC2 Gatekeeper signs URLs with the matching PRIVATE key; CloudFront
+  # verifies them against this public key before serving content.
+  # ---------------------------------------------------------------------------
+  SigningPublicKey:
+    Type: AWS::CloudFront::PublicKey
+    Properties:
+      PublicKeyConfig:
+        Name: !Sub "edustream-signing-key-${AWS::StackName}"
+        CallerReference: !Sub "edustream-${AWS::StackName}"
+        EncodedKey: !Ref CloudFrontPublicKey
+        Comment: EduStream CloudFront Signed URL public key
+
+  SigningKeyGroup:
+    Type: AWS::CloudFront::KeyGroup
+    Properties:
+      KeyGroupConfig:
+        Name: !Sub "edustream-key-group-${AWS::StackName}"
+        Comment: Trusted key group for EduStream signed URLs
+        Items:
+          - !Ref SigningPublicKey
+
+  # ---------------------------------------------------------------------------
+  # CloudFront distribution (the CDN) — global delivery, HTTPS-only, signed URLs
+  # ---------------------------------------------------------------------------
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: EduStream content distribution
+        Enabled: true
+        PriceClass: PriceClass_All            # global edge coverage (low latency)
+        HttpVersion: http2
+        DefaultCacheBehavior:
+          TargetOriginId: edustream-s3-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          # Managed-CachingOptimized policy.
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          # Only requests bearing a valid signature from this key group are served.
+          TrustedKeyGroups:
+            - !Ref SigningKeyGroup
+        Origins:
+          - Id: edustream-s3-origin
+            DomainName: !GetAtt ContentBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOAI}"
+        Logging:
+          Bucket: !GetAtt LogBucket.RegionalDomainName
+          Prefix: "cloudfront-access-logs/"
+          IncludeCookies: false
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+Outputs:
+  DistributionDomainName:
+    Description: Set as CLOUDFRONT_DOMAIN on the EC2 Gatekeeper.
+    Value: !GetAtt Distribution.DomainName
+  SigningKeyPairId:
+    Description: Set as CLOUDFRONT_KEY_PAIR_ID on the EC2 Gatekeeper.
+    Value: !Ref SigningPublicKey
+  OriginAccessIdentityId:
+    Description: The CloudFront OAI granted read access to the content bucket.
+    Value: !Ref CloudFrontOAI
+  ContentBucket:
+    Value: !Ref ContentBucket
+  LogBucket:
+    Value: !Ref LogBucket
